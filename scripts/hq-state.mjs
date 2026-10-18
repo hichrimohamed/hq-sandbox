@@ -2,15 +2,20 @@
 // Reads where the spec-to-ship work actually stands (files, git, GitHub) and
 // prints it as JSON for /hq-sync to write into the Spec to Ship HQ office.
 //
-// Usage: node scripts/hq-state.mjs [repo-dir]
+// Usage: node scripts/hq-state.mjs [repo-dir] [--out <dir>]
+// With --out, also writes one JSON file per office document (live/<id>.json,
+// validations/<id>.json) so /hq-sync can upload them exactly as produced.
 // Output: { meta, live: { <stage>: {now, checklist, links} }, validations: [...] }
 // Needs git; uses the gh CLI for PRs and CI when it is installed and logged in.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const dir = process.argv[2] ?? process.cwd();
+const args = process.argv.slice(2);
+const outIdx = args.indexOf("--out");
+const outDir = outIdx >= 0 ? args.splice(outIdx, 2)[1] : null;
+const dir = args[0] ?? process.cwd();
 const run = (cmd, args) => {
   try {
     return execFileSync(cmd, args, { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
@@ -154,8 +159,21 @@ live.ship = {
 
 const syncedAt = Date.now();
 for (const s of Object.values(live)) s.links = s.links.filter((l) => l && l.url);
-console.log(JSON.stringify({
+const result = {
   meta: { repo: repo?.nameWithOwner ?? dir, url: repo?.url ?? null, branch: current, syncedAt },
   live,
   validations: validations.map((v) => ({ ...v, source: "github" })),
-}, null, 2));
+};
+if (outDir) {
+  mkdirSync(join(outDir, "live"), { recursive: true });
+  mkdirSync(join(outDir, "validations"), { recursive: true });
+  writeFileSync(join(outDir, "live", "meta.json"), JSON.stringify(result.meta));
+  for (const [stage, s] of Object.entries(live)) {
+    writeFileSync(join(outDir, "live", `${stage}.json`), JSON.stringify({ stage, ...s, updatedAt: syncedAt }));
+  }
+  for (const v of result.validations) {
+    const { id, ...body } = v;
+    writeFileSync(join(outDir, "validations", `${id}.json`), JSON.stringify({ ...body, status: "pending", createdAt: syncedAt }));
+  }
+}
+console.log(JSON.stringify(result, null, 2));
