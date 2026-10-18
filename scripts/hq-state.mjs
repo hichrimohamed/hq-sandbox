@@ -171,10 +171,23 @@ live.ship = {
   links: merged[0] ? [{ label: `PR #${merged[0].number}`, url: merged[0].url }] : [],
 };
 
+// Guardrails: the pause switch and the latest entries of the agents' audit log
+const paused = existsSync(join(dir, ".hq", "STOP"));
+const auditLines = (read(".hq/audit.log") ?? "").trim().split("\n").filter(Boolean).slice(-200);
+const audit = auditLines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+live.audit = {
+  now: paused ? "Agents are paused" : `${audit.filter((e) => e.event === "blocked").length} blocked of the last ${audit.length} agent actions`,
+  checklist: audit.slice(-15).reverse().map((e) => ({
+    done: e.event !== "blocked",
+    text: `${new Date(e.ts).toISOString().slice(5, 16).replace("T", " ")} · ${e.event === "blocked" ? `BLOCKED ${e.command} (${e.reason})` : `${e.tool}: ${e.detail}`}`.slice(0, 220),
+  })),
+  links: [],
+};
+
 const syncedAt = Date.now();
 for (const s of Object.values(live)) s.links = s.links.filter((l) => l && l.url);
 const result = {
-  meta: { repo: repo?.nameWithOwner ?? dir, url: repo?.url ?? null, branch: current, syncedAt },
+  meta: { repo: repo?.nameWithOwner ?? dir, url: repo?.url ?? null, branch: current, paused, syncedAt },
   live,
   validations: validations.map((v) => ({ ...v, source: "github" })),
 };
