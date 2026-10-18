@@ -3,3 +3,4 @@ node_modules/
 .claude/sdd-cache/
 .DS_Store
 .hq/
+evals/results/
