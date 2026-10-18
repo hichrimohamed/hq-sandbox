@@ -9,6 +9,7 @@
 // Needs git; uses the gh CLI for PRs and CI when it is installed and logged in.
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -39,6 +40,11 @@ const firstParagraph = (text) =>
   text.split(/\n\s*\n/).map((p) => p.trim()).find((p) => p && !p.startsWith("#") && !/^\s*(\*\*)?status/i.test(p))?.replace(/\s+/g, " ").slice(0, 280) ?? "";
 const checkboxes = (text) =>
   [...text.matchAll(/^\s*[-*]\s+\[( |x|X)\]\s+(.+)$/gm)].map((m) => ({ done: m[1] !== " ", text: m[2].trim() }));
+// Fingerprint of a file's content, ignoring the status and feedback lines the
+// manager's decisions add, so a revised file becomes a new item to approve.
+const fingerprint = (text) =>
+  createHash("sha1").update(text.split("\n").filter((l) => !/^\s*(\*\*)?status(\*\*)?\s*:/i.test(l) && !/^>\s*Manager feedback/i.test(l)).join("\n")).digest("hex").slice(0, 7);
+const featureBranch = (title) => (current?.startsWith("feat/") ? current : `feat/${slugify(title)}`);
 const slugify = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "untitled";
 
 const live = {};
@@ -65,14 +71,22 @@ if (spec) {
   };
   if (!approved) {
     validations.push({
-      id: `spec-${slugify(title)}`, kind: "spec", from: "spec_pm", stage: "spec",
+      id: `spec-${slugify(title)}-${fingerprint(spec)}`, kind: "spec", from: "spec_pm", stage: "spec",
       title: `Approve SPEC.md: ${title}`, detail: firstParagraph(spec),
       bullets: live.spec.checklist.filter((c) => !c.done).map((c) => `Missing section: ${c.text}`),
-      url: fileUrl("SPEC.md", current), action: { type: "approve-file", path: "SPEC.md", branch: current },
+      url: fileUrl("SPEC.md", current), action: { type: "approve-file", path: "SPEC.md", branch: featureBranch(title) },
     });
   }
 } else {
-  live.spec = { now: "No spec in progress. Pass an idea, then run /spec in the repo.", checklist: [], links: [] };
+  // Ideas the manager approved in the office become GitHub issues labelled "idea"
+  const ideas = gh(["issue", "list", "--label", "idea", "--state", "open", "--json", "number,title,url"]) ?? [];
+  live.spec = ideas.length
+    ? {
+        now: `${ideas.length} approved idea${ideas.length === 1 ? "" : "s"} waiting for /spec`,
+        checklist: ideas.map((i) => ({ done: false, text: `#${i.number} ${i.title}` })),
+        links: ideas.slice(0, 3).map((i) => ({ label: `Issue #${i.number}`, url: i.url })),
+      }
+    : { now: "No spec in progress. Pass an idea, then run /spec in the repo.", checklist: [], links: [] };
 }
 
 // /plan: tasks/plan.md and the checkbox list in tasks/todo.md
@@ -89,10 +103,10 @@ if (plan || todo) {
   };
   if (plan && !approved) {
     validations.push({
-      id: `plan-${slugify(spec ? firstHeading(spec) : firstHeading(plan))}`, kind: "plan", from: "plan_lead", stage: "plan",
+      id: `plan-${slugify(spec ? firstHeading(spec) : firstHeading(plan))}-${fingerprint(plan)}`, kind: "plan", from: "plan_lead", stage: "plan",
       title: `Approve the plan: ${tasks.length} tasks`, detail: firstParagraph(plan),
       bullets: tasks.slice(0, 6).map((t) => t.text),
-      url: fileUrl("tasks/plan.md", current), action: { type: "approve-file", path: "tasks/plan.md", branch: current },
+      url: fileUrl("tasks/plan.md", current), action: { type: "approve-file", path: "tasks/plan.md", branch: featureBranch(spec ? firstHeading(spec) : firstHeading(plan)) },
     });
   }
 } else {
@@ -127,7 +141,7 @@ live.test = latest
   : { now: repo ? "No CI runs yet." : "GitHub not reachable; CI status unknown.", checklist: [], links: [] };
 
 // /review: open pull requests
-const prs = gh(["pr", "list", "--state", "open", "--json", "number,title,url,isDraft,reviewDecision,headRefName,statusCheckRollup,body"]) ?? [];
+const prs = gh(["pr", "list", "--state", "open", "--json", "number,title,url,isDraft,reviewDecision,headRefName,headRefOid,statusCheckRollup,body"]) ?? [];
 const checksOk = (pr) => (pr.statusCheckRollup ?? []).every((c) => (c.conclusion ?? c.state) === "SUCCESS");
 const reviewWord = { APPROVED: "approved", CHANGES_REQUESTED: "changes requested", REVIEW_REQUIRED: "review required" };
 live.review = prs.length
@@ -140,7 +154,7 @@ live.review = prs.length
 for (const pr of prs) {
   if (pr.isDraft) continue;
   validations.push({
-    id: `pr-${pr.number}`, kind: "merge", from: "ship_release", stage: "ship",
+    id: `pr-${pr.number}-${(pr.headRefOid ?? "").slice(0, 7)}`, kind: "merge", from: "ship_release", stage: "ship",
     title: `Merge PR #${pr.number}: ${pr.title}`,
     detail: (pr.body ?? "").replace(/\s+/g, " ").slice(0, 280),
     bullets: [`Checks: ${checksOk(pr) ? "passing" : "not all passing"}`, `Review: ${reviewWord[pr.reviewDecision] ?? "none yet"}`, `Branch: ${pr.headRefName}`],
