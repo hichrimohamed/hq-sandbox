@@ -2,6 +2,8 @@
 
 A small invoice API that the Spec to Ship HQ agents (`/spec → /plan → /build → /test → /review → /ship`) work on end to end. It exists to prove the workflow, the approvals and the guardrails before pointing the agents at a real product.
 
+[![Spec to Ship HQ launch video: click to play](docs/media/spec-to-ship-hq.jpg)](docs/media/spec-to-ship-hq.mp4)
+
 ## Run
 
 ```sh
